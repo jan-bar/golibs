@@ -3,8 +3,10 @@ package golibs
 import (
   "syscall"
   "time"
-
+  
   "unsafe"
+  
+  "github.com/lxn/win"
 )
 
 const (
@@ -24,7 +26,6 @@ const (
 )
 
 type (
-  Handle uintptr
   Word uint16
   DWord uint32
   TChar rune
@@ -59,8 +60,10 @@ var (
   setConsoleCursorPosition    uintptr
   setConsoleTextAttribute     uintptr
   setConsoleCursorInfo        uintptr
+  getConsoleWindow            uintptr
   getKeyState                 uintptr /* 处理win32api,获取键盘事件 */
-  setWindowText               uintptr /* 处理win32api,获取键盘事件 */
+  setWindowText               uintptr
+  hConsole                    win.HWND
 )
 
 /* 将 Coord 转换为 Dword */
@@ -77,62 +80,69 @@ func init() {
   if err != nil {
     panic(err)
   }
-
+  
   user32, err := syscall.LoadLibrary("user32.dll")
   if err != nil {
     panic(err)
   }
-
+  
   fillConsoleOutputAttribute, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputAttribute")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   fillConsoleOutputCharacterW, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputCharacterW")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   getStdHandle, err = syscall.GetProcAddress(kernel32, "GetStdHandle")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   getConsoleScreenBufferInfo, err = syscall.GetProcAddress(kernel32, "GetConsoleScreenBufferInfo")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   setConsoleCursorPosition, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorPosition")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   setConsoleTextAttribute, err = syscall.GetProcAddress(kernel32, "SetConsoleTextAttribute")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
   setConsoleCursorInfo, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorInfo")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
+  
+  getConsoleWindow, err = syscall.GetProcAddress(kernel32, "GetConsoleWindow")
+  if err != nil { /* 获取句柄失败 */
+    panic(err)
+  }
+  
   getKeyState, err = syscall.GetProcAddress(user32, "GetKeyState")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-
-  setWindowText, err = syscall.GetProcAddress(user32, "SetWindowTextA")
+  
+  setWindowText, err = syscall.GetProcAddress(user32, "SetWindowTextW")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
+  
+  hConsole = GetStdHandle(StdOutputHandle)
 }
 
 /**
 * 设置固定区域内的文本属性，从指定的控制台屏幕缓冲区字符坐标开始。
 **/
-func FillConsoleOutputAttribute(hConsoleOutput Handle, wAttribute Word, nLength DWord, dwWriteCoord Coord) *DWord {
+func FillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute Word, nLength DWord, dwWriteCoord Coord) *DWord {
   var lpNumberOfAttrsWritten DWord
   ret, _, _ := syscall.Syscall6(fillConsoleOutputAttribute, 5,
     uintptr(hConsoleOutput),
@@ -153,7 +163,7 @@ func FillConsoleOutputAttribute(hConsoleOutput Handle, wAttribute Word, nLength 
 * FillConsoleOutputCharacterA (ANSI)
 * FillConsoleOutputCharacter  (Default)
 **/
-func FillConsoleOutputCharacter(hConsoleOutput Handle, cCharacter TChar, nLength DWord, dwWriteCoord Coord) *DWord {
+func FillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLength DWord, dwWriteCoord Coord) *DWord {
   var lpNumberOfAttrsWritten DWord
   ret, _, _ := syscall.Syscall6(fillConsoleOutputCharacterW, 5,
     uintptr(hConsoleOutput),
@@ -172,18 +182,18 @@ func FillConsoleOutputCharacter(hConsoleOutput Handle, cCharacter TChar, nLength
 * 它用于从一个特定的标准设备（标准输入、标准输出或标准错误）
 * 中取得一个句柄（用来标识不同设备的数值）
 **/
-func GetStdHandle(nStdHandle DWord) Handle {
+func GetStdHandle(nStdHandle DWord) win.HWND {
   ret, _, _ := syscall.Syscall(getStdHandle, 1,
     uintptr(nStdHandle),
     0,
     0)
-  return Handle(ret)
+  return win.HWND(ret)
 }
 
 /**
 * 用于检索指定的控制台屏幕缓冲区的信息
 **/
-func GetConsoleScreenBufferInfo(hConsoleOutput Handle) *ConsoleScreenBufferInfo {
+func GetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferInfo {
   var CsBi ConsoleScreenBufferInfo
   ret, _, _ := syscall.Syscall(getConsoleScreenBufferInfo, 2,
     uintptr(hConsoleOutput),
@@ -198,7 +208,7 @@ func GetConsoleScreenBufferInfo(hConsoleOutput Handle) *ConsoleScreenBufferInfo 
 /**
 * 是API中定位光标位置的函数
 **/
-func SetConsoleCursorPosition(hConsoleOutput Handle, dwCursorPosition Coord) bool {
+func SetConsoleCursorPosition(hConsoleOutput win.HWND, dwCursorPosition Coord) bool {
   ret, _, _ := syscall.Syscall(setConsoleCursorPosition, 2,
     uintptr(hConsoleOutput),
     uintptr(CoordToDword(dwCursorPosition)),
@@ -209,7 +219,7 @@ func SetConsoleCursorPosition(hConsoleOutput Handle, dwCursorPosition Coord) boo
 /**
 * 设置控制台窗口字体颜色和背景色的计算机函数
 **/
-func SetConsoleTextAttribute(hConsoleOutput Handle, wAttributes Word) bool {
+func SetConsoleTextAttribute(hConsoleOutput win.HWND, wAttributes Word) bool {
   ret, _, _ := syscall.Syscall(setConsoleTextAttribute, 2,
     uintptr(hConsoleOutput),
     uintptr(wAttributes),
@@ -220,7 +230,7 @@ func SetConsoleTextAttribute(hConsoleOutput Handle, wAttributes Word) bool {
 /**
 * 设置光标属性
 **/
-func SetConsoleCursorInfo(hConsoleOutput Handle, lpConsoleCursorInfo ConsoleCursorInfo) bool {
+func SetConsoleCursorInfo(hConsoleOutput win.HWND, lpConsoleCursorInfo ConsoleCursorInfo) bool {
   ret, _, _ := syscall.Syscall(setConsoleCursorInfo, 2,
     uintptr(hConsoleOutput),
     uintptr(unsafe.Pointer(&lpConsoleCursorInfo)),
@@ -234,7 +244,6 @@ func SetConsoleCursorInfo(hConsoleOutput Handle, lpConsoleCursorInfo ConsoleCurs
 * 传false则隐藏光标
 **/
 func ShowHideCursor(show bool) {
-  hConsole := GetStdHandle(StdOutputHandle)
   var bVisible DWord = 0
   if show {
     bVisible = 1
@@ -246,7 +255,7 @@ func ShowHideCursor(show bool) {
 * 清屏函数
 **/
 func Clear() {
-  hConsole := GetStdHandle(StdOutputHandle)
+  hConsole = GetStdHandle(StdOutputHandle)
   coordScreen := Coord{0, 0}
   csbi := GetConsoleScreenBufferInfo(hConsole)
   dwConSize := DWord(csbi.DwSize.X * csbi.DwSize.Y)
@@ -260,7 +269,7 @@ func Clear() {
 * 光标定位到某个位置
 **/
 func GotoXY(x, y int) {
-  hConsole := GetStdHandle(StdOutputHandle)
+  hConsole = GetStdHandle(StdOutputHandle)
   SetConsoleCursorPosition(hConsole, Coord{x, y})
 }
 
@@ -268,8 +277,8 @@ func GotoXY(x, y int) {
 * 设置打印颜色
 **/
 func TextBackground(color int) {
-  hOut := GetStdHandle(StdOutputHandle)
-  SetConsoleTextAttribute(hOut, Word(color))
+  hConsole = GetStdHandle(StdOutputHandle)
+  SetConsoleTextAttribute(hConsole, Word(color))
 }
 
 /**
@@ -292,11 +301,11 @@ func WaitKeyBoard() (keyVal int32) {
       time.Sleep(time.Millisecond * 50)
     }
   }
-
+  
   for GetKeyState(keyVal) {
     time.Sleep(time.Millisecond * 100)
   } /* 松开才返回,避免判断按键重复按下 */
-
+  
   return
 }
 
@@ -311,13 +320,35 @@ func GetKeyState(nVirtKey int32) bool {
 }
 
 /**
+* 获取当前控制台句柄
+**/
+func GetConsoleWindow() win.HWND {
+  ret, _, _ := syscall.Syscall(getConsoleWindow, 0, 0, 0, 0)
+  return win.HWND(ret)
+}
+
+/**
 * 设置窗体左上角文字
 * SetWindowTextW (Unicode) and SetWindowTextA (ANSI)
 **/
-func SetWindowText(text *uint16) bool {
-  hConsole := GetStdHandle(StdOutputHandle)
+func SetWindowText(text string) bool {
+  str := win.SysAllocString(text) /* 申请字符串 */
   ret, _, _ := syscall.Syscall(setWindowText, 2,
-    uintptr(hConsole),
-    uintptr(unsafe.Pointer(text)), 0)
+    uintptr(GetConsoleWindow()),
+    uintptr(unsafe.Pointer(str)),
+    0)
+  win.SysFreeString(str) /* api说明中,用完就释放 */
   return ret != 0
+}
+
+/**
+* 居中显示窗体
+* 并设置宽高
+**/
+func CenterWindowOnScreen(w, h int32) {
+  xLeft := (win.GetSystemMetrics(win.SM_CXFULLSCREEN) - w) / 2
+  yTop := (win.GetSystemMetrics(win.SM_CYFULLSCREEN) - h) / 2
+  hWnd := GetConsoleWindow()
+  win.SetWindowPos(hWnd, win.HWND_TOPMOST, xLeft, yTop, w, h, win.SWP_NOZORDER)
+  win.SetWindowPos(hWnd, win.HWND_NOTOPMOST, 0, 0, 0, 0, win.SWP_NOSIZE|win.SWP_NOMOVE)
 }
