@@ -229,11 +229,11 @@ func SetConsoleCursorInfo(hConsoleOutput Handle, lpConsoleCursorInfo ConsoleCurs
 **/
 func ShowHideCursor(show bool) {
   hConsole := GetStdHandle(StdOutputHandle)
+  var bVisible DWord = 0
   if show {
-    SetConsoleCursorInfo(hConsole, ConsoleCursorInfo{1, 1})
-  } else {
-    SetConsoleCursorInfo(hConsole, ConsoleCursorInfo{1, 0})
+    bVisible = 1
   }
+  SetConsoleCursorInfo(hConsole, ConsoleCursorInfo{1, bVisible})
 }
 
 /**
