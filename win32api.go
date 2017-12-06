@@ -60,6 +60,7 @@ var (
   setConsoleTextAttribute     uintptr
   setConsoleCursorInfo        uintptr
   getKeyState                 uintptr /* 处理win32api,获取键盘事件 */
+  setWindowText               uintptr /* 处理win32api,获取键盘事件 */
 )
 
 /* 将 Coord 转换为 Dword */
@@ -118,6 +119,11 @@ func init() {
   }
 
   getKeyState, err = syscall.GetProcAddress(user32, "GetKeyState")
+  if err != nil { /* 获取句柄失败 */
+    panic(err)
+  }
+
+  setWindowText, err = syscall.GetProcAddress(user32, "SetWindowTextA")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
@@ -302,4 +308,16 @@ func WaitKeyBoard() (keyVal int32) {
 func GetKeyState(nVirtKey int32) bool {
   ret, _, _ := syscall.Syscall(getKeyState, 1, uintptr(nVirtKey), 0, 0)
   return int16(ret) < 0
+}
+
+/**
+* 设置窗体左上角文字
+* SetWindowTextW (Unicode) and SetWindowTextA (ANSI)
+**/
+func SetWindowText(text *uint16) bool {
+  hConsole := GetStdHandle(StdOutputHandle)
+  ret, _, _ := syscall.Syscall(setWindowText, 2,
+    uintptr(hConsole),
+    uintptr(unsafe.Pointer(text)), 0)
+  return ret != 0
 }
