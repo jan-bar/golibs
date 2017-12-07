@@ -3,9 +3,9 @@ package golibs
 import (
   "syscall"
   "time"
-  
+
   "unsafe"
-  
+
   "github.com/lxn/win"
 )
 
@@ -23,10 +23,13 @@ const (
   KeyDown             = 40 /* 向下按键的键值 */
   KeyLeft             = 37 /* 向左按键的键值 */
   KeyRight            = 39 /* 向右按键的键值 */
+  SB_HORZ             = 0  /* 显示或隐藏窗体的标准的水平滚动条 */
+  SB_VERT             = 1  /* 显示或隐藏窗体的标准的垂直滚动条 */
+  SB_CTL              = 2  /* 显示或隐藏滚动条控制。参数hWnd必须是指向滚动条控制的句柄 */
+  SB_BOTH             = 3  /* 显示或隐藏窗体的标准的水平或垂直滚动条 */
 )
 
 type (
-  Word uint16
   DWord uint32
   TChar rune
 )
@@ -42,7 +45,7 @@ type SmallRect struct {
 type ConsoleScreenBufferInfo struct {
   DwSize              Coord
   DwCursorPosition    Coord
-  WAttributes         Word
+  WAttributes         uint16
   SrWindow            SmallRect
   DwMaximumWindowSize Coord
 }
@@ -50,6 +53,11 @@ type ConsoleScreenBufferInfo struct {
 type ConsoleCursorInfo struct {
   dwSize   DWord
   bVisible DWord
+}
+
+type Win32Api struct {
+  hConsole win.HWND /* 标准输出句柄 */
+  cWindow  win.HWND /* 控制台窗体句柄 */
 }
 
 var (
@@ -63,11 +71,11 @@ var (
   getConsoleWindow            uintptr
   getKeyState                 uintptr /* 处理win32api,获取键盘事件 */
   setWindowText               uintptr
-  hConsole                    win.HWND
+  showScrollBar               uintptr
 )
 
 /* 将 Coord 转换为 Dword */
-func CoordToDword(c Coord) DWord {
+func mCoordToDword(c Coord) DWord {
   return DWord(int32(c.Y)<<16 + int32(c.X))
 }
 
@@ -80,75 +88,89 @@ func init() {
   if err != nil {
     panic(err)
   }
-  
+
   user32, err := syscall.LoadLibrary("user32.dll")
   if err != nil {
     panic(err)
   }
-  
+
   fillConsoleOutputAttribute, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputAttribute")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   fillConsoleOutputCharacterW, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputCharacterW")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   getStdHandle, err = syscall.GetProcAddress(kernel32, "GetStdHandle")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   getConsoleScreenBufferInfo, err = syscall.GetProcAddress(kernel32, "GetConsoleScreenBufferInfo")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   setConsoleCursorPosition, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorPosition")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   setConsoleTextAttribute, err = syscall.GetProcAddress(kernel32, "SetConsoleTextAttribute")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   setConsoleCursorInfo, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorInfo")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   getConsoleWindow, err = syscall.GetProcAddress(kernel32, "GetConsoleWindow")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   getKeyState, err = syscall.GetProcAddress(user32, "GetKeyState")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
+
   setWindowText, err = syscall.GetProcAddress(user32, "SetWindowTextW")
   if err != nil { /* 获取句柄失败 */
     panic(err)
   }
-  
-  hConsole = GetStdHandle(StdOutputHandle)
+
+  showScrollBar, err = syscall.GetProcAddress(user32, "ShowScrollBar")
+  if err != nil { /* 获取句柄失败 */
+    panic(err)
+  }
+}
+
+/**
+* 新建win32api对象
+**/
+func NewWin32Api() *Win32Api {
+  win32Api := new(Win32Api)                          /* 初始化对象 */
+  win32Api.hConsole = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
+  win32Api.cWindow = mGetConsoleWindow()             /* 得到控制台句柄 */
+
+  return win32Api /* 这2个变量全局有效 */
 }
 
 /**
 * 设置固定区域内的文本属性，从指定的控制台屏幕缓冲区字符坐标开始。
 **/
-func FillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute Word, nLength DWord, dwWriteCoord Coord) *DWord {
+func mFillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute uint16, nLength DWord, dwWriteCoord Coord) *DWord {
   var lpNumberOfAttrsWritten DWord
   ret, _, _ := syscall.Syscall6(fillConsoleOutputAttribute, 5,
     uintptr(hConsoleOutput),
     uintptr(wAttribute),
     uintptr(nLength),
-    uintptr(CoordToDword(dwWriteCoord)),
+    uintptr(mCoordToDword(dwWriteCoord)),
     uintptr(unsafe.Pointer(&lpNumberOfAttrsWritten)),
     0)
   if ret == 0 {
@@ -163,13 +185,13 @@ func FillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute Word, nLengt
 * FillConsoleOutputCharacterA (ANSI)
 * FillConsoleOutputCharacter  (Default)
 **/
-func FillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLength DWord, dwWriteCoord Coord) *DWord {
+func mFillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLength DWord, dwWriteCoord Coord) *DWord {
   var lpNumberOfAttrsWritten DWord
   ret, _, _ := syscall.Syscall6(fillConsoleOutputCharacterW, 5,
     uintptr(hConsoleOutput),
     uintptr(cCharacter),
     uintptr(nLength),
-    uintptr(CoordToDword(dwWriteCoord)),
+    uintptr(mCoordToDword(dwWriteCoord)),
     uintptr(unsafe.Pointer(&lpNumberOfAttrsWritten)),
     0)
   if ret == 0 {
@@ -182,7 +204,7 @@ func FillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLeng
 * 它用于从一个特定的标准设备（标准输入、标准输出或标准错误）
 * 中取得一个句柄（用来标识不同设备的数值）
 **/
-func GetStdHandle(nStdHandle DWord) win.HWND {
+func mGetStdHandle(nStdHandle DWord) win.HWND {
   ret, _, _ := syscall.Syscall(getStdHandle, 1,
     uintptr(nStdHandle),
     0,
@@ -193,7 +215,7 @@ func GetStdHandle(nStdHandle DWord) win.HWND {
 /**
 * 用于检索指定的控制台屏幕缓冲区的信息
 **/
-func GetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferInfo {
+func mGetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferInfo {
   var CsBi ConsoleScreenBufferInfo
   ret, _, _ := syscall.Syscall(getConsoleScreenBufferInfo, 2,
     uintptr(hConsoleOutput),
@@ -208,21 +230,22 @@ func GetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferInf
 /**
 * 是API中定位光标位置的函数
 **/
-func SetConsoleCursorPosition(hConsoleOutput win.HWND, dwCursorPosition Coord) bool {
+func mSetConsoleCursorPosition(hConsoleOutput win.HWND, dwCursorPosition Coord) bool {
   ret, _, _ := syscall.Syscall(setConsoleCursorPosition, 2,
     uintptr(hConsoleOutput),
-    uintptr(CoordToDword(dwCursorPosition)),
+    uintptr(mCoordToDword(dwCursorPosition)),
     0)
   return ret != 0
 }
 
 /**
 * 设置控制台窗口字体颜色和背景色的计算机函数
+* 私有,不对外开发
 **/
-func SetConsoleTextAttribute(hConsoleOutput win.HWND, wAttributes Word) bool {
+func mSetConsoleTextAttribute(hConsoleOutput win.HWND, wAttributes int) bool {
   ret, _, _ := syscall.Syscall(setConsoleTextAttribute, 2,
     uintptr(hConsoleOutput),
-    uintptr(wAttributes),
+    uintptr(uint16(wAttributes)),
     0)
   return ret != 0
 }
@@ -243,42 +266,39 @@ func SetConsoleCursorInfo(hConsoleOutput win.HWND, lpConsoleCursorInfo ConsoleCu
 * 传true则显示光标
 * 传false则隐藏光标
 **/
-func ShowHideCursor(show bool) {
+func (api *Win32Api) ShowHideCursor(show bool) {
   var bVisible DWord = 0
   if show {
     bVisible = 1
   }
-  SetConsoleCursorInfo(hConsole, ConsoleCursorInfo{1, bVisible})
+  SetConsoleCursorInfo(api.hConsole, ConsoleCursorInfo{1, bVisible})
 }
 
 /**
 * 清屏函数
 **/
-func Clear() {
-  hConsole = GetStdHandle(StdOutputHandle)
+func (api *Win32Api) Clear() {
   coordScreen := Coord{0, 0}
-  csbi := GetConsoleScreenBufferInfo(hConsole)
+  csbi := mGetConsoleScreenBufferInfo(api.hConsole)
   dwConSize := DWord(csbi.DwSize.X * csbi.DwSize.Y)
-  FillConsoleOutputCharacter(hConsole, TChar(' '), dwConSize, coordScreen)
-  csbi = GetConsoleScreenBufferInfo(hConsole)
-  FillConsoleOutputAttribute(hConsole, csbi.WAttributes, dwConSize, coordScreen)
-  SetConsoleCursorPosition(hConsole, coordScreen)
+  mFillConsoleOutputCharacter(api.hConsole, TChar(' '), dwConSize, coordScreen)
+  csbi = mGetConsoleScreenBufferInfo(api.hConsole)
+  mFillConsoleOutputAttribute(api.hConsole, csbi.WAttributes, dwConSize, coordScreen)
+  mSetConsoleCursorPosition(api.hConsole, coordScreen)
 }
 
 /**
 * 光标定位到某个位置
 **/
-func GotoXY(x, y int) {
-  hConsole = GetStdHandle(StdOutputHandle)
-  SetConsoleCursorPosition(hConsole, Coord{x, y})
+func (api *Win32Api) GotoXY(x, y int) {
+  mSetConsoleCursorPosition(api.hConsole, Coord{x, y})
 }
 
 /**
 * 设置打印颜色
 **/
-func TextBackground(color int) {
-  hConsole = GetStdHandle(StdOutputHandle)
-  SetConsoleTextAttribute(hConsole, Word(color))
+func (api *Win32Api) TextBackground(color int) {
+  mSetConsoleTextAttribute(api.hConsole, color)
 }
 
 /**
@@ -301,11 +321,11 @@ func WaitKeyBoard() (keyVal int32) {
       time.Sleep(time.Millisecond * 50)
     }
   }
-  
+
   for GetKeyState(keyVal) {
     time.Sleep(time.Millisecond * 100)
   } /* 松开才返回,避免判断按键重复按下 */
-  
+
   return
 }
 
@@ -321,8 +341,9 @@ func GetKeyState(nVirtKey int32) bool {
 
 /**
 * 获取当前控制台句柄
+* 私有,不对外开发
 **/
-func GetConsoleWindow() win.HWND {
+func mGetConsoleWindow() win.HWND {
   ret, _, _ := syscall.Syscall(getConsoleWindow, 0, 0, 0, 0)
   return win.HWND(ret)
 }
@@ -331,10 +352,10 @@ func GetConsoleWindow() win.HWND {
 * 设置窗体左上角文字
 * SetWindowTextW (Unicode) and SetWindowTextA (ANSI)
 **/
-func SetWindowText(text string) bool {
+func (api *Win32Api) SetWindowText(text string) bool {
   str := win.SysAllocString(text) /* 申请字符串 */
   ret, _, _ := syscall.Syscall(setWindowText, 2,
-    uintptr(GetConsoleWindow()),
+    uintptr(api.cWindow),
     uintptr(unsafe.Pointer(str)),
     0)
   win.SysFreeString(str) /* api说明中,用完就释放 */
@@ -345,10 +366,23 @@ func SetWindowText(text string) bool {
 * 居中显示窗体
 * 并设置宽高
 **/
-func CenterWindowOnScreen(w, h int32) {
+func (api *Win32Api) CenterWindowOnScreen(w, h int32) {
   xLeft := (win.GetSystemMetrics(win.SM_CXFULLSCREEN) - w) / 2
   yTop := (win.GetSystemMetrics(win.SM_CYFULLSCREEN) - h) / 2
-  hWnd := GetConsoleWindow()
-  win.SetWindowPos(hWnd, win.HWND_TOPMOST, xLeft, yTop, w, h, win.SWP_NOZORDER)
-  win.SetWindowPos(hWnd, win.HWND_NOTOPMOST, 0, 0, 0, 0, win.SWP_NOSIZE|win.SWP_NOMOVE)
+  win.SetWindowPos(api.cWindow, win.HWND_TOPMOST, xLeft, yTop, w, h, win.SWP_NOZORDER)
+  win.SetWindowPos(api.cWindow, win.HWND_NOTOPMOST, 0, 0, 0, 0, win.SWP_NOSIZE|win.SWP_NOMOVE)
+}
+
+/**
+* 显示或隐藏滚动条
+* wBar看定义
+* bShow=0隐藏,bShow=1显示
+* 控制滚动条,还有EnableScrollBar
+**/
+func (api *Win32Api) ShowScrollBar(wBar, bShow DWord) bool {
+  ret, _, _ := syscall.Syscall(showScrollBar, 3,
+    uintptr(api.cWindow),
+    uintptr(wBar),
+    uintptr(bShow))
+  return ret != 0
 }
