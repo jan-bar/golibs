@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/lxn/win"
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -60,18 +61,19 @@ type Win32Api struct {
 }
 
 var (
-	fillConsoleOutputAttribute  uintptr
-	fillConsoleOutputCharacterW uintptr
-	getStdHandle                uintptr
-	getConsoleScreenBufferInfo  uintptr
-	setConsoleCursorPosition    uintptr
-	setConsoleTextAttribute     uintptr
-	setConsoleCursorInfo        uintptr
-	getConsoleWindow            uintptr
-	getKeyState                 uintptr /* 处理win32api,获取键盘事件 */
-	setWindowText               uintptr
-	showScrollBar               uintptr
-	getTickCount                uintptr
+	fillConsoleOutputAttribute  *windows.LazyProc
+	fillConsoleOutputCharacterW *windows.LazyProc
+	getStdHandle                *windows.LazyProc
+	getConsoleScreenBufferInfo  *windows.LazyProc
+	setConsoleCursorPosition    *windows.LazyProc
+	setConsoleTextAttribute     *windows.LazyProc
+	setConsoleCursorInfo        *windows.LazyProc
+	getConsoleWindow            *windows.LazyProc
+	getKeyState                 *windows.LazyProc /* 处理win32api,获取键盘事件 */
+	setWindowText               *windows.LazyProc
+	showScrollBar               *windows.LazyProc
+	getTickCount                *windows.LazyProc
+	setLayeredWindowAttributes  *windows.LazyProc
 )
 
 /* 将 Coord 转换为 Dword */
@@ -84,75 +86,24 @@ func mCoordToDword(c Coord) DWord {
 * 主要加载win32api的方法
 **/
 func init() {
-	kernel32, err := syscall.LoadLibrary("kernel32.dll")
-	if err != nil {
-		panic(err)
-	}
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 
-	user32, err := syscall.LoadLibrary("user32.dll")
-	if err != nil {
-		panic(err)
-	}
+	fillConsoleOutputAttribute = kernel32.NewProc("FillConsoleOutputAttribute")
+	fillConsoleOutputCharacterW = kernel32.NewProc("FillConsoleOutputCharacterW")
+	getStdHandle = kernel32.NewProc("GetStdHandle")
+	getConsoleScreenBufferInfo = kernel32.NewProc("GetConsoleScreenBufferInfo")
+	setConsoleCursorPosition = kernel32.NewProc("SetConsoleCursorPosition")
+	setConsoleTextAttribute = kernel32.NewProc("SetConsoleTextAttribute")
+	setConsoleCursorInfo = kernel32.NewProc("SetConsoleCursorInfo")
+	getConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	getTickCount = kernel32.NewProc("GetTickCount")
 
-	fillConsoleOutputAttribute, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputAttribute")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
 
-	fillConsoleOutputCharacterW, err = syscall.GetProcAddress(kernel32, "FillConsoleOutputCharacterW")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	getStdHandle, err = syscall.GetProcAddress(kernel32, "GetStdHandle")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	getConsoleScreenBufferInfo, err = syscall.GetProcAddress(kernel32, "GetConsoleScreenBufferInfo")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	setConsoleCursorPosition, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorPosition")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	setConsoleTextAttribute, err = syscall.GetProcAddress(kernel32, "SetConsoleTextAttribute")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	setConsoleCursorInfo, err = syscall.GetProcAddress(kernel32, "SetConsoleCursorInfo")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	getConsoleWindow, err = syscall.GetProcAddress(kernel32, "GetConsoleWindow")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	getKeyState, err = syscall.GetProcAddress(user32, "GetKeyState")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	setWindowText, err = syscall.GetProcAddress(user32, "SetWindowTextW")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	showScrollBar, err = syscall.GetProcAddress(user32, "ShowScrollBar")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
-
-	getTickCount, err = syscall.GetProcAddress(kernel32, "GetTickCount")
-	if err != nil { /* 获取句柄失败 */
-		panic(err)
-	}
+	getKeyState = user32.NewProc("GetKeyState")
+	setWindowText = user32.NewProc("SetWindowTextW")
+	showScrollBar = user32.NewProc("ShowScrollBar")
+	setLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 }
 
 /**
@@ -162,8 +113,7 @@ func NewWin32Api() *Win32Api {
 	win32Api := new(Win32Api)                          /* 初始化对象 */
 	win32Api.hConsole = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
 	win32Api.cWindow = mGetConsoleWindow()             /* 得到控制台句柄 */
-
-	return win32Api /* 这2个变量全局有效 */
+	return win32Api                                    /* 这2个变量全局有效 */
 }
 
 /**
@@ -171,7 +121,7 @@ func NewWin32Api() *Win32Api {
 **/
 func mFillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute uint16, nLength DWord, dwWriteCoord Coord) *DWord {
 	var lpNumberOfAttrsWritten DWord
-	ret, _, _ := syscall.Syscall6(fillConsoleOutputAttribute, 5,
+	ret, _, _ := syscall.Syscall6(fillConsoleOutputAttribute.Addr(), 5,
 		uintptr(hConsoleOutput),
 		uintptr(wAttribute),
 		uintptr(nLength),
@@ -192,7 +142,7 @@ func mFillConsoleOutputAttribute(hConsoleOutput win.HWND, wAttribute uint16, nLe
 **/
 func mFillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLength DWord, dwWriteCoord Coord) *DWord {
 	var lpNumberOfAttrsWritten DWord
-	ret, _, _ := syscall.Syscall6(fillConsoleOutputCharacterW, 5,
+	ret, _, _ := syscall.Syscall6(fillConsoleOutputCharacterW.Addr(), 5,
 		uintptr(hConsoleOutput),
 		uintptr(cCharacter),
 		uintptr(nLength),
@@ -210,7 +160,7 @@ func mFillConsoleOutputCharacter(hConsoleOutput win.HWND, cCharacter TChar, nLen
 * 中取得一个句柄（用来标识不同设备的数值）
 **/
 func mGetStdHandle(nStdHandle DWord) win.HWND {
-	ret, _, _ := syscall.Syscall(getStdHandle, 1,
+	ret, _, _ := syscall.Syscall(getStdHandle.Addr(), 1,
 		uintptr(nStdHandle),
 		0,
 		0)
@@ -222,7 +172,7 @@ func mGetStdHandle(nStdHandle DWord) win.HWND {
 **/
 func mGetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferInfo {
 	var CsBi ConsoleScreenBufferInfo
-	ret, _, _ := syscall.Syscall(getConsoleScreenBufferInfo, 2,
+	ret, _, _ := syscall.Syscall(getConsoleScreenBufferInfo.Addr(), 2,
 		uintptr(hConsoleOutput),
 		uintptr(unsafe.Pointer(&CsBi)),
 		0)
@@ -236,7 +186,7 @@ func mGetConsoleScreenBufferInfo(hConsoleOutput win.HWND) *ConsoleScreenBufferIn
 * 是API中定位光标位置的函数
 **/
 func mSetConsoleCursorPosition(hConsoleOutput win.HWND, dwCursorPosition Coord) bool {
-	ret, _, _ := syscall.Syscall(setConsoleCursorPosition, 2,
+	ret, _, _ := syscall.Syscall(setConsoleCursorPosition.Addr(), 2,
 		uintptr(hConsoleOutput),
 		uintptr(mCoordToDword(dwCursorPosition)),
 		0)
@@ -248,7 +198,7 @@ func mSetConsoleCursorPosition(hConsoleOutput win.HWND, dwCursorPosition Coord) 
 * 私有,不对外开发
 **/
 func mSetConsoleTextAttribute(hConsoleOutput win.HWND, wAttributes int) bool {
-	ret, _, _ := syscall.Syscall(setConsoleTextAttribute, 2,
+	ret, _, _ := syscall.Syscall(setConsoleTextAttribute.Addr(), 2,
 		uintptr(hConsoleOutput),
 		uintptr(uint16(wAttributes)),
 		0)
@@ -259,7 +209,7 @@ func mSetConsoleTextAttribute(hConsoleOutput win.HWND, wAttributes int) bool {
 * 设置光标属性
 **/
 func SetConsoleCursorInfo(hConsoleOutput win.HWND, lpConsoleCursorInfo ConsoleCursorInfo) bool {
-	ret, _, _ := syscall.Syscall(setConsoleCursorInfo, 2,
+	ret, _, _ := syscall.Syscall(setConsoleCursorInfo.Addr(), 2,
 		uintptr(hConsoleOutput),
 		uintptr(unsafe.Pointer(&lpConsoleCursorInfo)),
 		0)
@@ -330,7 +280,6 @@ func WaitKeyBoard() (keyVal int32) {
 	for GetKeyState(keyVal) {
 		time.Sleep(time.Millisecond * 100)
 	} /* 松开才返回,避免判断按键重复按下 */
-
 	return
 }
 
@@ -340,7 +289,7 @@ func WaitKeyBoard() (keyVal int32) {
 * 按下返回true,松开返回false
 **/
 func GetKeyState(nVirtKey int32) bool {
-	ret, _, _ := syscall.Syscall(getKeyState, 1, uintptr(nVirtKey), 0, 0)
+	ret, _, _ := syscall.Syscall(getKeyState.Addr(), 1, uintptr(nVirtKey), 0, 0)
 	return int16(ret) < 0
 }
 
@@ -349,7 +298,7 @@ func GetKeyState(nVirtKey int32) bool {
 * 私有,不对外开发
 **/
 func mGetConsoleWindow() win.HWND {
-	ret, _, _ := syscall.Syscall(getConsoleWindow, 0, 0, 0, 0)
+	ret, _, _ := syscall.Syscall(getConsoleWindow.Addr(), 0, 0, 0, 0)
 	return win.HWND(ret)
 }
 
@@ -359,7 +308,7 @@ func mGetConsoleWindow() win.HWND {
 **/
 func (api *Win32Api) SetWindowText(text string) bool {
 	str := win.SysAllocString(text) /* 申请字符串 */
-	ret, _, _ := syscall.Syscall(setWindowText, 2,
+	ret, _, _ := syscall.Syscall(setWindowText.Addr(), 2,
 		uintptr(api.cWindow),
 		uintptr(unsafe.Pointer(str)),
 		0)
@@ -385,10 +334,28 @@ func (api *Win32Api) CenterWindowOnScreen(w, h int32) {
 * 控制滚动条,还有EnableScrollBar
 **/
 func (api *Win32Api) ShowScrollBar(wBar, bShow DWord) bool {
-	ret, _, _ := syscall.Syscall(showScrollBar, 3,
+	ret, _, _ := syscall.Syscall(showScrollBar.Addr(), 3,
 		uintptr(api.cWindow),
 		uintptr(wBar),
 		uintptr(bShow))
+	return ret != 0
+}
+
+func RGB(r, g, b byte) DWord {
+	return DWord(r) | DWord(g)<<8 | DWord(b)<<16
+}
+
+/**
+* crKey   : RGB(r,g,b)
+* bAlpha  : 0~255
+* dwFlags : LWA_ALPHA=0x2,LWA_COLORKEY=0x1,LWA_ALPHA | LWA_COLORKEY
+**/
+func (api *Win32Api) SetLayeredWindowAttributes(crKey, bAlpha, dwFlags DWord) bool {
+	ret, _, _ := syscall.Syscall6(setLayeredWindowAttributes.Addr(), 4,
+		uintptr(api.cWindow),
+		uintptr(crKey),
+		uintptr(bAlpha),
+		uintptr(dwFlags), 0, 0)
 	return ret != 0
 }
 
@@ -396,6 +363,6 @@ func (api *Win32Api) ShowScrollBar(wBar, bShow DWord) bool {
 * 获取电脑开机到现在的秒数
  */
 func GetTickCount() int64 {
-	ret, _, _ := syscall.Syscall(getTickCount, 0, 0, 0, 0)
+	ret, _, _ := syscall.Syscall(getTickCount.Addr(), 0, 0, 0, 0)
 	return int64(ret)
 }
