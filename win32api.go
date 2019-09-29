@@ -11,6 +11,7 @@ import (
 
 const (
 	StdOutputHandle     = 0xFFFFFFF5
+	StdInputHandle      = 0xFFFFFFF6
 	ForegroundBlue      = 0x01
 	ForegroundGreen     = 0x02
 	ForegroundRed       = 0x04
@@ -31,34 +32,36 @@ const (
 
 type (
 	DWord uint32
+	Word  uint16
 	TChar rune
+
+	Coord struct {
+		X, Y int
+	}
+
+	SmallRect struct {
+		Left, Top, Right, Bottom int16
+	}
+
+	ConsoleScreenBufferInfo struct {
+		DwSize              Coord
+		DwCursorPosition    Coord
+		WAttributes         uint16
+		SrWindow            SmallRect
+		DwMaximumWindowSize Coord
+	}
+
+	ConsoleCursorInfo struct {
+		dwSize   DWord
+		bVisible DWord
+	}
+
+	Win32Api struct {
+		hStdOutPut win.HWND /* 标准输出句柄 */
+		hStdInPut  win.HWND /* 标准输入句柄 */
+		cWindow    win.HWND /* 控制台窗体句柄 */
+	}
 )
-
-type Coord struct {
-	X, Y int
-}
-
-type SmallRect struct {
-	Left, Top, Right, Bottom int16
-}
-
-type ConsoleScreenBufferInfo struct {
-	DwSize              Coord
-	DwCursorPosition    Coord
-	WAttributes         uint16
-	SrWindow            SmallRect
-	DwMaximumWindowSize Coord
-}
-
-type ConsoleCursorInfo struct {
-	dwSize   DWord
-	bVisible DWord
-}
-
-type Win32Api struct {
-	hConsole win.HWND /* 标准输出句柄 */
-	cWindow  win.HWND /* 控制台窗体句柄 */
-}
 
 var (
 	fillConsoleOutputAttribute  *windows.LazyProc
@@ -74,11 +77,14 @@ var (
 	showScrollBar               *windows.LazyProc
 	getTickCount                *windows.LazyProc
 	setLayeredWindowAttributes  *windows.LazyProc
+	getConsoleMode              *windows.LazyProc
+	setConsoleMode              *windows.LazyProc
+	readConsoleInput            *windows.LazyProc
 )
 
 /* 将 Coord 转换为 Dword */
 func mCoordToDword(c Coord) DWord {
-	return DWord(int32(c.Y)<<16 + int32(c.X))
+	return DWord(c.Y)<<16 | DWord(c.X)
 }
 
 /**
@@ -97,6 +103,9 @@ func init() {
 	setConsoleCursorInfo = kernel32.NewProc("SetConsoleCursorInfo")
 	getConsoleWindow = kernel32.NewProc("GetConsoleWindow")
 	getTickCount = kernel32.NewProc("GetTickCount")
+	getConsoleMode = kernel32.NewProc("GetConsoleMode")
+	setConsoleMode = kernel32.NewProc("SetConsoleMode")
+	readConsoleInput = kernel32.NewProc("ReadConsoleInputA")
 
 	user32 := windows.NewLazySystemDLL("user32.dll")
 
@@ -110,10 +119,11 @@ func init() {
 * 新建win32api对象
 **/
 func NewWin32Api() *Win32Api {
-	win32Api := new(Win32Api)                          /* 初始化对象 */
-	win32Api.hConsole = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
-	win32Api.cWindow = mGetConsoleWindow()             /* 得到控制台句柄 */
-	return win32Api                                    /* 这2个变量全局有效 */
+	win32Api := new(Win32Api)                            /* 初始化对象 */
+	win32Api.hStdOutPut = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
+	win32Api.hStdInPut = mGetStdHandle(StdInputHandle)   /* 得到标准输出句柄 */
+	win32Api.cWindow = mGetConsoleWindow()               /* 得到控制台句柄 */
+	return win32Api                                      /* 这2个变量全局有效 */
 }
 
 /**
@@ -226,7 +236,7 @@ func (api *Win32Api) ShowHideCursor(show bool) {
 	if show {
 		bVisible = 1
 	}
-	SetConsoleCursorInfo(api.hConsole, ConsoleCursorInfo{1, bVisible})
+	SetConsoleCursorInfo(api.hStdOutPut, ConsoleCursorInfo{1, bVisible})
 }
 
 /**
@@ -234,26 +244,78 @@ func (api *Win32Api) ShowHideCursor(show bool) {
 **/
 func (api *Win32Api) Clear() {
 	coordScreen := Coord{0, 0}
-	csbi := mGetConsoleScreenBufferInfo(api.hConsole)
+	csbi := mGetConsoleScreenBufferInfo(api.hStdOutPut)
 	dwConSize := DWord(csbi.DwSize.X * csbi.DwSize.Y)
-	mFillConsoleOutputCharacter(api.hConsole, TChar(' '), dwConSize, coordScreen)
-	csbi = mGetConsoleScreenBufferInfo(api.hConsole)
-	mFillConsoleOutputAttribute(api.hConsole, csbi.WAttributes, dwConSize, coordScreen)
-	mSetConsoleCursorPosition(api.hConsole, coordScreen)
+	mFillConsoleOutputCharacter(api.hStdOutPut, TChar(' '), dwConSize, coordScreen)
+	csbi = mGetConsoleScreenBufferInfo(api.hStdOutPut)
+	mFillConsoleOutputAttribute(api.hStdOutPut, csbi.WAttributes, dwConSize, coordScreen)
+	mSetConsoleCursorPosition(api.hStdOutPut, coordScreen)
 }
 
 /**
 * 光标定位到某个位置
 **/
 func (api *Win32Api) GotoXY(x, y int) {
-	mSetConsoleCursorPosition(api.hConsole, Coord{x, y})
+	mSetConsoleCursorPosition(api.hStdOutPut, Coord{x, y})
 }
 
 /**
 * 设置打印颜色
 **/
 func (api *Win32Api) TextBackground(color int) {
-	mSetConsoleTextAttribute(api.hConsole, color)
+	mSetConsoleTextAttribute(api.hStdOutPut, color)
+}
+
+/**
+* 获取标准输入方式
+**/
+func (api *Win32Api) GetConsoleMode() *DWord {
+	var mode DWord
+	ret, _, _ := syscall.Syscall(getConsoleMode.Addr(), 2,
+		uintptr(api.hStdInPut),
+		uintptr(unsafe.Pointer(&mode)), 0)
+	if ret != 0 {
+		return nil
+	}
+	return &mode
+}
+
+/**
+* 设置标准输入方式
+* 具体参数看微软文档,这里懒得写成预定义了
+**/
+func (api *Win32Api) SetConsoleMode(mode DWord) error {
+	_, _, err := syscall.Syscall(setConsoleMode.Addr(), 2,
+		uintptr(api.hStdInPut),
+		uintptr(mode), 0)
+	return err
+}
+
+/**
+* 获取一个按键值,在该按键按下松开时才返回键值
+**/
+func (api *Win32Api) ReadOneKey() byte {
+	var (
+		lpBuffer = make([]byte, 20)
+		lpNumber DWord
+		keyVal   byte = 255
+		ret      uintptr
+		trap     = uintptr(api.hStdInPut)
+		a1       = uintptr(unsafe.Pointer(&lpBuffer[0]))
+		a4       = uintptr(unsafe.Pointer(&lpNumber))
+	)
+	for {
+		ret, _, _ = syscall.Syscall6(readConsoleInput.Addr(), 2,
+			trap, a1, 1, a4, 0, 0)
+		if ret != 0 && lpBuffer[0] == 1 { // 按键事件
+			if lpBuffer[4] == 1 && keyVal == 255 {
+				keyVal = lpBuffer[10] // 按下,且为首次按键
+			} else if lpBuffer[4] == 0 && keyVal == lpBuffer[10] {
+				break // 该按键松开
+			}
+		}
+	}
+	return keyVal
 }
 
 /**
