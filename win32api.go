@@ -80,6 +80,7 @@ var (
 	getConsoleMode              *windows.LazyProc
 	setConsoleMode              *windows.LazyProc
 	readConsoleInput            *windows.LazyProc
+	mouseEvent            *windows.LazyProc
 )
 
 /* 将 Coord 转换为 Dword */
@@ -109,6 +110,7 @@ func init() {
 
 	user32 := windows.NewLazySystemDLL("user32.dll")
 
+	mouseEvent = user32.NewProc("mouse_event")
 	getKeyState = user32.NewProc("GetKeyState")
 	setWindowText = user32.NewProc("SetWindowTextW")
 	showScrollBar = user32.NewProc("ShowScrollBar")
@@ -353,6 +355,48 @@ func WaitKeyBoard() (keyVal int32) {
 func GetKeyState(nVirtKey int32) bool {
 	ret, _, _ := syscall.Syscall(getKeyState.Addr(), 1, uintptr(nVirtKey), 0, 0)
 	return int16(ret) < 0
+}
+
+/**
+* 鼠标事件
+**/
+const (
+	MOUSEEVENTF_ABSOLUTE   DWord = 0x8000
+	MOUSEEVENTF_LEFTDOWN   DWord = 0x0002
+	MOUSEEVENTF_LEFTUP     DWord = 0x0004
+	MOUSEEVENTF_MIDDLEDOWN DWord = 0x0020
+	MOUSEEVENTF_MIDDLEUP   DWord = 0x0040
+	MOUSEEVENTF_MOVE       DWord = 0x0001
+	MOUSEEVENTF_RIGHTDOWN  DWord = 0x0008
+	MOUSEEVENTF_RIGHTUP    DWord = 0x0010
+	MOUSEEVENTF_WHEEL      DWord = 0x0800
+	MOUSEEVENTF_XDOWN      DWord = 0x0080
+	MOUSEEVENTF_XUP        DWord = 0x0100
+	MOUSEEVENTF_HWHEEL     DWord = 0x01000
+)
+
+func MouseEvent(dwFlags DWord, args ...DWord) {
+	var dx, dy, dwData, dwExtraInfo DWord
+	switch len(args) {
+	case 4:
+		dwExtraInfo = args[3]
+		fallthrough
+	case 3:
+		dwData = args[2]
+		fallthrough
+	case 2:
+		dy = args[1]
+		fallthrough
+	case 1:
+		dx = args[0]
+	}
+	syscall.Syscall6(mouseEvent.Addr(), 5,
+		uintptr(dwFlags),
+		uintptr(dx),
+		uintptr(dy),
+		uintptr(dwData),
+		uintptr(dwExtraInfo),
+		0)
 }
 
 /**
