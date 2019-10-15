@@ -20,14 +20,19 @@ const (
 	BackgroundGreen     = 0x20
 	BackgroundRed       = 0x40
 	BackgroundIntensity = 0x80
-	KeyUp               = 38 /* 向上按键的键值 */
-	KeyDown             = 40 /* 向下按键的键值 */
-	KeyLeft             = 37 /* 向左按键的键值 */
-	KeyRight            = 39 /* 向右按键的键值 */
-	SB_HORZ             = 0  /* 显示或隐藏窗体的标准的水平滚动条 */
-	SB_VERT             = 1  /* 显示或隐藏窗体的标准的垂直滚动条 */
-	SB_CTL              = 2  /* 显示或隐藏滚动条控制。参数hWnd必须是指向滚动条控制的句柄 */
-	SB_BOTH             = 3  /* 显示或隐藏窗体的标准的水平或垂直滚动条 */
+
+	KeyUp      = win.VK_UP      /* 向上按键的键值 */
+	KeyDown    = win.VK_DOWN    /* 向下按键的键值 */
+	KeyLeft    = win.VK_LEFT    /* 向左按键的键值 */
+	KeyRight   = win.VK_RIGHT   /* 向右按键的键值 */
+	MouseLeft  = win.VK_LBUTTON /* 鼠标左键 */
+	MouseRight = win.VK_RBUTTON /* 鼠标右键 */
+	MouseMid   = win.VK_MBUTTON /* 鼠标中键 */
+
+	SB_HORZ = 0 /* 显示或隐藏窗体的标准的水平滚动条 */
+	SB_VERT = 1 /* 显示或隐藏窗体的标准的垂直滚动条 */
+	SB_CTL  = 2 /* 显示或隐藏滚动条控制。参数hWnd必须是指向滚动条控制的句柄 */
+	SB_BOTH = 3 /* 显示或隐藏窗体的标准的水平或垂直滚动条 */
 )
 
 type (
@@ -80,7 +85,8 @@ var (
 	getConsoleMode              *windows.LazyProc
 	setConsoleMode              *windows.LazyProc
 	readConsoleInput            *windows.LazyProc
-	mouseEvent            *windows.LazyProc
+	mouseEvent                  *windows.LazyProc
+	getCursorPos                *windows.LazyProc
 )
 
 /* 将 Coord 转换为 Dword */
@@ -114,6 +120,7 @@ func init() {
 	getKeyState = user32.NewProc("GetKeyState")
 	setWindowText = user32.NewProc("SetWindowTextW")
 	showScrollBar = user32.NewProc("ShowScrollBar")
+	getCursorPos = user32.NewProc("GetCursorPos")
 	setLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 }
 
@@ -125,7 +132,12 @@ func NewWin32Api() *Win32Api {
 	win32Api.hStdOutPut = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
 	win32Api.hStdInPut = mGetStdHandle(StdInputHandle)   /* 得到标准输出句柄 */
 	win32Api.cWindow = mGetConsoleWindow()               /* 得到控制台句柄 */
-	return win32Api                                      /* 这2个变量全局有效 */
+	mode := win32Api.GetConsoleMode()
+	*mode &= ^EnableQuickEditMode // 移除快速编辑模式
+	*mode &= ^EnableInsertMode    // 移除插入模式
+	*mode &= ^EnableMouseInput    // 移除鼠标输入
+	win32Api.SetConsoleMode(*mode)
+	return win32Api /* 这2个变量全局有效 */
 }
 
 /**
@@ -276,7 +288,7 @@ func (api *Win32Api) GetConsoleMode() *DWord {
 	ret, _, _ := syscall.Syscall(getConsoleMode.Addr(), 2,
 		uintptr(api.hStdInPut),
 		uintptr(unsafe.Pointer(&mode)), 0)
-	if ret != 0 {
+	if ret == 0 {
 		return nil
 	}
 	return &mode
@@ -286,6 +298,12 @@ func (api *Win32Api) GetConsoleMode() *DWord {
 * 设置标准输入方式
 * 具体参数看微软文档,这里懒得写成预定义了
 **/
+const (
+	EnableQuickEditMode DWord = 0x0040 // 快速编辑模式
+	EnableInsertMode    DWord = 0x0020 // 插入模式
+	EnableMouseInput    DWord = 0x0010 // 鼠标输入
+)
+
 func (api *Win32Api) SetConsoleMode(mode DWord) error {
 	_, _, err := syscall.Syscall(setConsoleMode.Addr(), 2,
 		uintptr(api.hStdInPut),
@@ -302,49 +320,45 @@ func (api *Win32Api) ReadOneKey() byte {
 		lpNumber DWord
 		keyVal   byte = 255
 		ret      uintptr
+		sTime    = time.Millisecond * 100
 		trap     = uintptr(api.hStdInPut)
 		a1       = uintptr(unsafe.Pointer(&lpBuffer[0]))
 		a4       = uintptr(unsafe.Pointer(&lpNumber))
+		read     = readConsoleInput.Addr()
 	)
 	for {
-		ret, _, _ = syscall.Syscall6(readConsoleInput.Addr(), 2,
-			trap, a1, 1, a4, 0, 0)
+		ret, _, _ = syscall.Syscall6(read, 2, trap, a1, 1, a4, 0, 0)
 		if ret != 0 && lpBuffer[0] == 1 { // 按键事件
 			if lpBuffer[4] == 1 && keyVal == 255 {
 				keyVal = lpBuffer[10] // 按下,且为首次按键
 			} else if lpBuffer[4] == 0 && keyVal == lpBuffer[10] {
 				break // 该按键松开
 			}
+			time.Sleep(sTime)
 		}
 	}
 	return keyVal
 }
 
 /**
-* 等待<上,下,左,右>
-* 这4个按键按下并松开
-* 一旦满足则返回键值
+* 等待对应按键按下并松开,返回对应键值
 **/
-func WaitKeyBoard() (keyVal int32) {
-	for keyVal == 0 {
-		switch {
-		case GetKeyState(KeyUp):
-			keyVal = KeyUp
-		case GetKeyState(KeyDown):
-			keyVal = KeyDown
-		case GetKeyState(KeyLeft):
-			keyVal = KeyLeft
-		case GetKeyState(KeyRight):
-			keyVal = KeyRight
-		default:
-			time.Sleep(time.Millisecond * 50)
+func WaitKeyBoard(key ...int) int {
+	keyVal, sTime := 0, time.Millisecond*100
+	for {
+		for _, v := range key {
+			if GetKeyState(v) {
+				keyVal = v
+				goto waitUp
+			}
 		}
+		time.Sleep(sTime)
 	}
-
+waitUp:
 	for GetKeyState(keyVal) {
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(sTime)
 	} /* 松开才返回,避免判断按键重复按下 */
-	return
+	return keyVal
 }
 
 /**
@@ -352,7 +366,7 @@ func WaitKeyBoard() (keyVal int32) {
 * 传入键值
 * 按下返回true,松开返回false
 **/
-func GetKeyState(nVirtKey int32) bool {
+func GetKeyState(nVirtKey int) bool {
 	ret, _, _ := syscall.Syscall(getKeyState.Addr(), 1, uintptr(nVirtKey), 0, 0)
 	return int16(ret) < 0
 }
@@ -431,6 +445,26 @@ func (api *Win32Api) CenterWindowOnScreen(w, h int32) {
 	yTop := (win.GetSystemMetrics(win.SM_CYFULLSCREEN) - h) / 2
 	win.SetWindowPos(api.cWindow, win.HWND_TOPMOST, xLeft, yTop, w, h, win.SWP_NOZORDER)
 	win.SetWindowPos(api.cWindow, win.HWND_NOTOPMOST, 0, 0, 0, 0, win.SWP_NOSIZE|win.SWP_NOMOVE)
+}
+
+/**
+* 获取当前鼠标坐标
+* mouse: 当按下鼠标左键、中键、右键时返回键值和鼠标坐标
+**/
+func GetCursorPos(pt *win.POINT, mouse *int) bool {
+	if mouse != nil {
+		*mouse = WaitKeyBoard(MouseLeft, MouseRight, MouseMid)
+	}
+	ret, _, _ := syscall.Syscall(getCursorPos.Addr(), 1,
+		uintptr(unsafe.Pointer(pt)), 0, 0)
+	return ret != 0
+}
+
+/**
+* 获取鼠标相对于控制台坐标
+**/
+func (api *Win32Api) GetCursorPos(pt *win.POINT, mouse *int) bool {
+	return GetCursorPos(pt, mouse) && win.ScreenToClient(api.cWindow, pt)
 }
 
 /**
