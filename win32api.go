@@ -130,12 +130,7 @@ func NewWin32Api() *Win32Api {
 	win32Api.hStdOutPut = mGetStdHandle(StdOutputHandle) /* 得到标准输出句柄 */
 	win32Api.hStdInPut = mGetStdHandle(StdInputHandle)   /* 得到标准输出句柄 */
 	win32Api.cWindow = mGetConsoleWindow()               /* 得到控制台句柄 */
-	mode := win32Api.GetConsoleMode()
-	*mode &= ^EnableQuickEditMode // 移除快速编辑模式
-	*mode &= ^EnableInsertMode    // 移除插入模式
-	*mode &= ^EnableMouseInput    // 移除鼠标输入
-	win32Api.SetConsoleMode(*mode)
-	return win32Api /* 这2个变量全局有效 */
+	return win32Api
 }
 
 /**
@@ -300,6 +295,8 @@ const (
 	EnableQuickEditMode DWord = 0x0040 // 快速编辑模式
 	EnableInsertMode    DWord = 0x0020 // 插入模式
 	EnableMouseInput    DWord = 0x0010 // 鼠标输入
+	EnableExtendedFlags DWord = 0x0080
+	EnableWindowInput   DWord = 0x0008
 )
 
 func (api *Win32Api) SetConsoleMode(mode DWord) error {
