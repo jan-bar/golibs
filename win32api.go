@@ -21,13 +21,13 @@ const (
 	BackgroundRed       = 0x40
 	BackgroundIntensity = 0x80
 
-	KeyUp      = win.VK_UP      /* 向上按键的键值 */
-	KeyDown    = win.VK_DOWN    /* 向下按键的键值 */
-	KeyLeft    = win.VK_LEFT    /* 向左按键的键值 */
-	KeyRight   = win.VK_RIGHT   /* 向右按键的键值 */
-	MouseLeft  = win.VK_LBUTTON /* 鼠标左键 */
-	MouseRight = win.VK_RBUTTON /* 鼠标右键 */
-	MouseMid   = win.VK_MBUTTON /* 鼠标中键 */
+	KeyUp      int32 = win.VK_UP      /* 向上按键的键值 */
+	KeyDown    int32 = win.VK_DOWN    /* 向下按键的键值 */
+	KeyLeft    int32 = win.VK_LEFT    /* 向左按键的键值 */
+	KeyRight   int32 = win.VK_RIGHT   /* 向右按键的键值 */
+	MouseLeft  int32 = win.VK_LBUTTON /* 鼠标左键 */
+	MouseRight int32 = win.VK_RBUTTON /* 鼠标右键 */
+	MouseMid   int32 = win.VK_MBUTTON /* 鼠标中键 */
 
 	SB_HORZ = 0 /* 显示或隐藏窗体的标准的水平滚动条 */
 	SB_VERT = 1 /* 显示或隐藏窗体的标准的垂直滚动条 */
@@ -77,7 +77,6 @@ var (
 	setConsoleTextAttribute     *windows.LazyProc
 	setConsoleCursorInfo        *windows.LazyProc
 	getConsoleWindow            *windows.LazyProc
-	getKeyState                 *windows.LazyProc /* 处理win32api,获取键盘事件 */
 	setWindowText               *windows.LazyProc
 	showScrollBar               *windows.LazyProc
 	getTickCount                *windows.LazyProc
@@ -117,7 +116,6 @@ func init() {
 	user32 := windows.NewLazySystemDLL("user32.dll")
 
 	mouseEvent = user32.NewProc("mouse_event")
-	getKeyState = user32.NewProc("GetKeyState")
 	setWindowText = user32.NewProc("SetWindowTextW")
 	showScrollBar = user32.NewProc("ShowScrollBar")
 	getCursorPos = user32.NewProc("GetCursorPos")
@@ -343,11 +341,11 @@ func (api *Win32Api) ReadOneKey() byte {
 /**
 * 等待对应按键按下并松开,返回对应键值
 **/
-func WaitKeyBoard(key ...int) int {
-	keyVal, sTime := 0, time.Millisecond*100
+func WaitKeyBoard(key ...int32) int32 {
+	keyVal, sTime := int32(0), time.Millisecond*100
 	for {
 		for _, v := range key {
-			if GetKeyState(v) {
+			if win.GetKeyState(v) < 0 {
 				keyVal = v
 				goto waitUp
 			}
@@ -355,39 +353,29 @@ func WaitKeyBoard(key ...int) int {
 		time.Sleep(sTime)
 	}
 waitUp:
-	for GetKeyState(keyVal) {
+	for win.GetKeyState(keyVal) < 0 {
 		time.Sleep(sTime)
 	} /* 松开才返回,避免判断按键重复按下 */
 	return keyVal
 }
 
 /**
-* win32编程,获取键盘输入
-* 传入键值
-* 按下返回true,松开返回false
-**/
-func GetKeyState(nVirtKey int) bool {
-	ret, _, _ := syscall.Syscall(getKeyState.Addr(), 1, uintptr(nVirtKey), 0, 0)
-	return int16(ret) < 0
-}
-
-/**
 * 鼠标事件
 **/
-const (
-	MOUSEEVENTF_ABSOLUTE   DWord = 0x8000
-	MOUSEEVENTF_LEFTDOWN   DWord = 0x0002
-	MOUSEEVENTF_LEFTUP     DWord = 0x0004
-	MOUSEEVENTF_MIDDLEDOWN DWord = 0x0020
-	MOUSEEVENTF_MIDDLEUP   DWord = 0x0040
-	MOUSEEVENTF_MOVE       DWord = 0x0001
-	MOUSEEVENTF_RIGHTDOWN  DWord = 0x0008
-	MOUSEEVENTF_RIGHTUP    DWord = 0x0010
-	MOUSEEVENTF_WHEEL      DWord = 0x0800
-	MOUSEEVENTF_XDOWN      DWord = 0x0080
-	MOUSEEVENTF_XUP        DWord = 0x0100
-	MOUSEEVENTF_HWHEEL     DWord = 0x01000
-)
+//const (
+//	MOUSEEVENTF_ABSOLUTE   DWord = 0x8000
+//	MOUSEEVENTF_LEFTDOWN   DWord = 0x0002
+//	MOUSEEVENTF_LEFTUP     DWord = 0x0004
+//	MOUSEEVENTF_MIDDLEDOWN DWord = 0x0020
+//	MOUSEEVENTF_MIDDLEUP   DWord = 0x0040
+//	MOUSEEVENTF_MOVE       DWord = 0x0001
+//	MOUSEEVENTF_RIGHTDOWN  DWord = 0x0008
+//	MOUSEEVENTF_RIGHTUP    DWord = 0x0010
+//	MOUSEEVENTF_WHEEL      DWord = 0x0800
+//	MOUSEEVENTF_XDOWN      DWord = 0x0080
+//	MOUSEEVENTF_XUP        DWord = 0x0100
+//	MOUSEEVENTF_HWHEEL     DWord = 0x01000
+//)
 
 func MouseEvent(dwFlags DWord, args ...DWord) {
 	var dx, dy, dwData, dwExtraInfo DWord
@@ -451,7 +439,7 @@ func (api *Win32Api) CenterWindowOnScreen(w, h int32) {
 * 获取当前鼠标坐标
 * mouse: 当按下鼠标左键、中键、右键时返回键值和鼠标坐标
 **/
-func GetCursorPos(pt *win.POINT, mouse *int) bool {
+func GetCursorPos(pt *win.POINT, mouse *int32) bool {
 	if mouse != nil {
 		*mouse = WaitKeyBoard(MouseLeft, MouseRight, MouseMid)
 	}
@@ -461,10 +449,15 @@ func GetCursorPos(pt *win.POINT, mouse *int) bool {
 }
 
 /**
-* 获取鼠标相对于控制台坐标
+* pt1鼠标相对控制台坐标
+* pt2鼠标全局坐标
 **/
-func (api *Win32Api) GetCursorPos(pt *win.POINT, mouse *int) bool {
-	return GetCursorPos(pt, mouse) && win.ScreenToClient(api.cWindow, pt)
+func (api *Win32Api) GetCursorPos(pt1 *win.POINT, pt2 *win.POINT, mouse *int32) bool {
+	if !GetCursorPos(pt1, mouse) {
+		return false
+	}
+	pt2.X, pt2.Y = pt1.X, pt1.Y
+	return win.ScreenToClient(api.cWindow, pt1)
 }
 
 /**
