@@ -91,6 +91,14 @@ var (
 	readConsoleInput            *windows.LazyProc
 	mouseEvent                  *windows.LazyProc
 	getCursorPos                *windows.LazyProc
+	createToolHelp32Snapshot    *windows.LazyProc
+	process32First              *windows.LazyProc
+	process32Next               *windows.LazyProc
+	readProcessMemory           *windows.LazyProc
+	openProcess                 *windows.LazyProc
+	writeProcessMemory          *windows.LazyProc
+	virtualQueryEx              *windows.LazyProc
+	getSystemInfo               *windows.LazyProc
 )
 
 /* 将 Coord 转换为 Dword */
@@ -117,6 +125,14 @@ func init() {
 	getConsoleMode = kernel32.NewProc("GetConsoleMode")
 	setConsoleMode = kernel32.NewProc("SetConsoleMode")
 	readConsoleInput = kernel32.NewProc("ReadConsoleInputA")
+	createToolHelp32Snapshot = kernel32.NewProc("CreateToolhelp32Snapshot")
+	process32First = kernel32.NewProc("Process32First")
+	process32Next = kernel32.NewProc("Process32Next")
+	openProcess = kernel32.NewProc("OpenProcess")
+	readProcessMemory = kernel32.NewProc("ReadProcessMemory")
+	writeProcessMemory = kernel32.NewProc("WriteProcessMemory")
+	virtualQueryEx = kernel32.NewProc("VirtualQueryEx")
+	getSystemInfo = kernel32.NewProc("GetSystemInfo")
 
 	user32 := windows.NewLazySystemDLL("user32.dll")
 
@@ -580,6 +596,198 @@ func CaptureRect(name string, args ...int) (image.Image, error) {
 		}
 	}
 	return img, nil
+}
+
+/*----------------------------------------------------------------------------*/
+const (
+	TH32CsINHERIT      = 0x80000000
+	TH32CsSNAPHEAPLIST = 0x00000001
+	TH32CsSNAPMODULE   = 0x00000008
+	TH32CsSNAPMODULE32 = 0x00000010
+	TH32CsSNAPPROCESS  = 0x00000002
+	TH32CsSNAPTHREAD   = 0x00000004
+	InvalidHandleValue = 0xFFFFFFFF
+
+	MaxPath = 260 // 可以适当减小
+)
+
+type ProcessEntry32 struct {
+	DwSize              uint32
+	CntUsage            uint32
+	Th32ProcessID       uint32
+	Th32DefaultHeapID   *uint32
+	Th32ModuleID        uint32
+	CntThreads          uint32
+	Th32ParentProcessID uint32
+	PcPriClassBase      uint32
+	DwFlags             uint32
+	SzExeFile           [MaxPath]byte
+}
+
+func (p *ProcessEntry32) GetFileName() string {
+	i := 0 // 因为C语言'\0'结束,所以go里面得截成string
+	for ; i < MaxPath; i++ {
+		if p.SzExeFile[i] == 0 {
+			break
+		}
+	}
+	return BytesToString(p.SzExeFile[:i])
+}
+
+func CreateToolHelp32Snapshot(dwFlags, th32ProcessID DWord) win.HANDLE {
+	ret, _, _ := syscall.Syscall(createToolHelp32Snapshot.Addr(), 2,
+		uintptr(dwFlags), uintptr(th32ProcessID), 0)
+	return win.HANDLE(ret)
+}
+
+func Process32First(hSnapshot win.HANDLE, lppe *ProcessEntry32) bool {
+	ret, _, _ := syscall.Syscall(process32First.Addr(), 2,
+		uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)), 0)
+	return ret != 0
+}
+
+func Process32Next(hSnapshot win.HANDLE, lppe *ProcessEntry32) bool {
+	ret, _, _ := syscall.Syscall(process32Next.Addr(), 2,
+		uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)), 0)
+	return ret != 0
+}
+
+// 遍历所有进程,出现异常则退出
+func RangeProcess(f func(*ProcessEntry32) error) (err error) {
+	h := CreateToolHelp32Snapshot(TH32CsSNAPPROCESS, 0)
+	if h == InvalidHandleValue {
+		return fmt.Errorf("CreateToolHelp32Snapshot:%d", win.GetLastError())
+	}
+	defer win.CloseHandle(h)
+
+	pe := new(ProcessEntry32)
+	pe.DwSize = uint32(reflect.TypeOf(*pe).Size())
+	for ok := Process32First(h, pe); ok; ok = Process32Next(h, pe) {
+		if err = f(pe); err != nil {
+			return
+		}
+	}
+	return
+}
+
+// 根据进程名得到进程pid,返回nil表示空或错误
+func FindPidFromName(name string) []uint32 {
+	pid := make([]uint32, 0, 1)
+	if RangeProcess(func(entry32 *ProcessEntry32) error {
+		if name == BytesToString(entry32.SzExeFile[:len(name)]) {
+			pid = append(pid, entry32.Th32ProcessID)
+		}
+		return nil
+	}) != nil {
+		return nil
+	}
+	return pid
+}
+
+/*----------------------------------------------------------------------------
+Win32 C/C++ golang 字符对照表
+
+	WIN32类型		C/C++ 类型			GO 类型
+	HANDLE			void *				uintptr
+	BYTE			unsigned char		uint8, byte
+	SHORT			short				int16
+	WORD			unsigned short		uint16
+	INT				int					int32, int
+	UINT			unsigned int		uint32
+	LONG			long				int32
+	BOOL			int					int
+	DWORD			unsigned long		uint32
+	ULONG			unsigned long		uint32
+	CHAR			char				byte
+	WCHAR			wchar_t				uint16
+	LPSTR			utf8/char *			*byte
+	LPCSTR			const utf8/char *	*byte, syscall.StringBytePtr(), xc.UTF8PtrToSting()
+	LPWSTR			wchar_t *			*uint16
+	LPCWSTR			const wchar_t *		*uint16, syscall.StringToUTF16Ptr()
+	FLOAT			float				float32
+	DOUBLE			double				float64
+	LONGLONG		__int64				int64
+	DWORD64			unsigned __int64	uint64
+*/
+
+const ProcessAllAccess = 0x1F0FFF // 所有权限
+
+func OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId uint32) win.HANDLE {
+	ret, _, _ := syscall.Syscall(openProcess.Addr(), 3,
+		uintptr(dwDesiredAccess), /* 访问权限 */
+		uintptr(bInheritHandle),  /* 是否继承句柄 */
+		uintptr(dwProcessId))     /* 进程pid */
+	return win.HANDLE(ret)
+}
+
+// 将hProcess进程的lpBaseAddress内存地址读出内容到lpBuffer中,lpNumberOfBytesRead为真实读出个数
+func ReadProcessMemory(hProcess win.HANDLE, lpBaseAddress int32, lpBuffer []byte) bool {
+	var lpNumberOfBytesRead int32
+	ret, _, _ := syscall.Syscall6(readProcessMemory.Addr(), 5,
+		uintptr(hProcess),
+		uintptr(lpBaseAddress),
+		uintptr(unsafe.Pointer(&lpBuffer[0])),
+		uintptr(len(lpBuffer)),
+		uintptr(unsafe.Pointer(&lpNumberOfBytesRead)), 0)
+	return int32(ret) == lpNumberOfBytesRead
+}
+
+// 往hProcess进程的lpBaseAddress内存地址写入lpBuffer,lpNumberOfBytesWritten为真实写入个数
+func WriteProcessMemory(hProcess win.HANDLE, lpBaseAddress int32, lpBuffer []byte) bool {
+	var lpNumberOfBytesWritten int32
+	ret, _, _ := syscall.Syscall6(writeProcessMemory.Addr(), 5,
+		uintptr(hProcess),
+		uintptr(lpBaseAddress),
+		uintptr(unsafe.Pointer(&lpBuffer[0])),
+		uintptr(len(lpBuffer)),
+		uintptr(unsafe.Pointer(&lpNumberOfBytesWritten)), 0)
+	return int32(ret) == lpNumberOfBytesWritten
+}
+
+type MemoryBasicInformation struct {
+	BaseAddress       int64
+	AllocationBase    int64
+	AllocationProtect int32
+	RegionSize        int64
+	State             int32
+	Protect           int32
+	Type              int32
+}
+
+const (
+	PageReadWrite = 4
+	MemCommit     = 4096
+)
+
+// 成功返回true
+func VirtualQueryEx(hProcess win.HANDLE, lpAddress int64, lpBuffer *MemoryBasicInformation) bool {
+	dwLength := unsafe.Sizeof(*lpBuffer)
+	ret, _, _ := syscall.Syscall6(virtualQueryEx.Addr(), 4,
+		uintptr(hProcess),
+		uintptr(lpAddress),
+		uintptr(unsafe.Pointer(lpBuffer)),
+		dwLength, 0, 0)
+	return ret == dwLength
+}
+
+type SystemInfo struct {
+	WProcessorArchitecture      int16 // dwOemId
+	WReserved                   int16 // dwOemId
+	DwPageSize                  int32
+	LpMinimumApplicationAddress int64
+	LpMaximumApplicationAddress int32
+	DwActiveProcessorMask       int64
+	DwNumberOfProcessors        int32
+	DwProcessorType             int32
+	DwAllocationGranularity     int32
+	WProcessorLevel             int16
+	WProcessorRevision          int16
+}
+
+func GetSystemInfo(lpSystemInfo *SystemInfo) bool {
+	ret, _, _ := syscall.Syscall(getSystemInfo.Addr(), 1,
+		uintptr(unsafe.Pointer(lpSystemInfo)), 0, 0)
+	return ret != 0
 }
 
 /*----------------------------------------------------------------------------*/
