@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"unsafe"
 )
 
@@ -35,4 +38,19 @@ func StringToBytes(s string) []byte {
 // 由于共用内存,[]byte改变时string也会变
 func BytesToString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
+}
+
+// 更方便易用的exec.Command
+func Command(name, args string) (*exec.Cmd, error) {
+	if filepath.Base(name) == name {
+		lp, err := exec.LookPath(name)
+		if err != nil {
+			return nil, err
+		}
+		name = lp
+	}
+	return &exec.Cmd{
+		Path:        name,
+		SysProcAttr: &syscall.SysProcAttr{CmdLine: name + " " + args},
+	}, nil
 }

@@ -1,6 +1,11 @@
 package golibs
 
 import (
+	"fmt"
+	"image"
+	"image/png"
+	"os"
+	"reflect"
 	"syscall"
 	"time"
 	"unsafe"
@@ -496,3 +501,85 @@ func GetTickCount() int64 {
 	ret, _, _ := syscall.Syscall(getTickCount.Addr(), 0, 0, 0, 0)
 	return int64(ret)
 }
+
+/*----------------------------------------------------------------------------*/
+// 截屏, name!="" 则会保存文件,args代表x,y,w,h,如果参数不全则截取全屏
+func CaptureRect(name string, args ...int) (image.Image, error) {
+	var x, y, w, h int32
+	if len(args) != 4 {
+		w = win.GetSystemMetrics(win.SM_CXFULLSCREEN)
+		h = win.GetSystemMetrics(win.SM_CYFULLSCREEN)
+	} else {
+		x, y, w, h = int32(args[0]), int32(args[1]), int32(args[2]), int32(args[3])
+	}
+	hDC := win.GetDC(0)
+	if hDC == 0 {
+		return nil, fmt.Errorf("Could not Get primary display err:%d.\n", win.GetLastError())
+	}
+	defer win.ReleaseDC(0, hDC)
+
+	mhDC := win.CreateCompatibleDC(hDC)
+	if mhDC == 0 {
+		return nil, fmt.Errorf("Could not Create Compatible DC err:%d.\n", win.GetLastError())
+	}
+	defer win.DeleteDC(mhDC)
+
+	bt := new(win.BITMAPINFO)
+	bt.BmiHeader.BiSize = uint32(reflect.TypeOf(bt.BmiHeader).Size())
+	bt.BmiHeader.BiWidth = w
+	bt.BmiHeader.BiHeight = -h
+	bt.BmiHeader.BiPlanes = 1
+	bt.BmiHeader.BiBitCount = 32
+	bt.BmiHeader.BiCompression = win.BI_RGB
+
+	ptr := unsafe.Pointer(uintptr(0))
+	mhBmp := win.CreateDIBSection(mhDC, (*win.BITMAPINFOHEADER)(unsafe.Pointer(bt)), win.DIB_RGB_COLORS, &ptr, 0, 0)
+	if mhBmp == 0 {
+		return nil, fmt.Errorf("Could not Create DIB Section err:%d.\n", win.GetLastError())
+	}
+	if win.GpStatus(mhBmp) == win.InvalidParameter {
+		return nil, fmt.Errorf("One or more of the input parameters is invalid while calling CreateDIBSection.\n")
+	}
+	defer win.DeleteObject(win.HGDIOBJ(mhBmp))
+
+	obj := win.SelectObject(mhDC, win.HGDIOBJ(mhBmp))
+	if obj == 0 {
+		return nil, fmt.Errorf("error occurred and the selected object is not a region err:%d.\n", win.GetLastError())
+	}
+	if obj == 0xffffffff { // GDI_ERROR
+		return nil, fmt.Errorf("GDI_ERROR while calling SelectObject err:%d.\n", win.GetLastError())
+	}
+	defer win.DeleteObject(obj)
+
+	//Note:BitBlt contains bad error handling, we will just assume it works and if it doesn't it will panic :x
+	win.BitBlt(mhDC, 0, 0, w, h, hDC, x, y, win.SRCCOPY)
+
+	var (
+		slice  []uint8
+		ww, hh = int(w), int(h)
+		lSlice = ww * hh * 4
+	)
+	hDrp := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
+	hDrp.Data = uintptr(ptr)
+	hDrp.Len, hDrp.Cap = lSlice, lSlice
+
+	imageBytes := make([]uint8, lSlice)
+	for i := 0; i < lSlice; i += 4 {
+		imageBytes[i], imageBytes[i+2], imageBytes[i+1], imageBytes[i+3] = slice[i+2], slice[i], slice[i+1], slice[i+3]
+	}
+
+	img := &image.RGBA{Pix: imageBytes, Stride: 4 * ww, Rect: image.Rect(0, 0, ww, hh)}
+	if name != "" { // 保存图片
+		fw, err := os.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		defer fw.Close()
+		if err = png.Encode(fw, img); err != nil {
+			return nil, err
+		}
+	}
+	return img, nil
+}
+
+/*----------------------------------------------------------------------------*/
