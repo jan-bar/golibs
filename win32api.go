@@ -723,25 +723,33 @@ func OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId uint32) win.HANDLE
 // 将hProcess进程的lpBaseAddress内存地址读出内容到lpBuffer中,lpNumberOfBytesRead为真实读出个数
 func ReadProcessMemory(hProcess win.HANDLE, lpBaseAddress int32, lpBuffer []byte) bool {
 	var lpNumberOfBytesRead int32
+	readSize := int32(len(lpBuffer))
 	ret, _, _ := syscall.Syscall6(readProcessMemory.Addr(), 5,
 		uintptr(hProcess),
 		uintptr(lpBaseAddress),
 		uintptr(unsafe.Pointer(&lpBuffer[0])),
-		uintptr(len(lpBuffer)),
+		uintptr(readSize),
 		uintptr(unsafe.Pointer(&lpNumberOfBytesRead)), 0)
-	return int32(ret) == lpNumberOfBytesRead
+	if ret == 0 {
+		return false
+	}
+	return readSize == lpNumberOfBytesRead
 }
 
 // 往hProcess进程的lpBaseAddress内存地址写入lpBuffer,lpNumberOfBytesWritten为真实写入个数
 func WriteProcessMemory(hProcess win.HANDLE, lpBaseAddress int32, lpBuffer []byte) bool {
 	var lpNumberOfBytesWritten int32
+	writeSize := int32(len(lpBuffer))
 	ret, _, _ := syscall.Syscall6(writeProcessMemory.Addr(), 5,
 		uintptr(hProcess),
 		uintptr(lpBaseAddress),
 		uintptr(unsafe.Pointer(&lpBuffer[0])),
-		uintptr(len(lpBuffer)),
+		uintptr(writeSize),
 		uintptr(unsafe.Pointer(&lpNumberOfBytesWritten)), 0)
-	return int32(ret) == lpNumberOfBytesWritten
+	if ret == 0 {
+		return false
+	}
+	return writeSize == lpNumberOfBytesWritten
 }
 
 type MemoryBasicInformation struct {
