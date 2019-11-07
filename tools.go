@@ -3,6 +3,7 @@ package golibs
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -53,4 +54,22 @@ func Command(name, args string) (*exec.Cmd, error) {
 		Path:        name,
 		SysProcAttr: &syscall.SysProcAttr{CmdLine: name + " " + args},
 	}, nil
+}
+
+// 判断文件或目录存在且类型正确
+func IsFilePathExists(path string, isFile bool) error {
+	if path == "" {
+		return errors.New("path is nil")
+	}
+	f, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if isFile != f.IsDir() {
+		return nil
+	}
+	if isFile {
+		return errors.New(path + " not file")
+	}
+	return errors.New(path + " not dir")
 }
