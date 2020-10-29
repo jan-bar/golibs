@@ -16,11 +16,6 @@ var (
     }
 )
 
-const (
-    success = "The operation completed successfully."
-    exists  = "Cannot create a file when that file already exists."
-)
-
 /*
 通过windows信号量互斥原理实现单例运行
 */
@@ -43,10 +38,7 @@ func SingletonWin(name string) error {
         uintptr(unsafe.Pointer(lpName)))
     singletonWin.h = syscall.Handle(r0)
     if e1 != 0 {
-        switch e1.Error() {
-        case success:
-            return nil
-        case exists:
+        if e1 == 0xb7 { // 已有互斥体错误码
             return ErrSingleton
         }
         return e1
